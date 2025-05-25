@@ -1,23 +1,23 @@
-# === Imports and Setup ===
 import nltk
 import json
 import pickle
 import random
 import numpy as np
 import matplotlib.pyplot as plt
+from tqdm import tqdm
 
 from keras.models import Sequential
 from keras.layers import Dense, Dropout
 from keras.callbacks import EarlyStopping, ModelCheckpoint
 from tensorflow.keras.optimizers import SGD
 from nltk.stem import WordNetLemmatizer
-from datasets import load_dataset
+import datasets as importer
 
 
 #! change the following constants as needed
 EPOCHS = 200
 USE_EXTERNAL_DATASET = True  # set to False to use intents.json
-
+dataset_url = "OpenAssistant/oasst1"
 
 # download necessary NLTK resources
 nltk.download('punkt_tab')
@@ -33,16 +33,19 @@ ignore_words = ['?', '!']
 if USE_EXTERNAL_DATASET:
     print("[ ! ] Using external dataset.")
     #! use the defined dataset, intents are specific to the dataset
-    ds = load_dataset("OpenAssistant/oasst1")
+    ds = importer.load_dataset(dataset_url)
+    print(str(ds.num_rows) + " rows in the dataset.")
+    print("[ ! ] Converting dataset to intents format...")
     intents = {
         "intents": [
             {
                 "tag": "chat",
-                "patterns": [item['text'] for item in ds['train'] if item['role'] == 'prompter'],
-                "responses": [item['text'] for item in ds['train'] if item['role'] == 'assistant']
+                "patterns": [item['text'] for item in tqdm(ds['train']) if item['role'] == 'prompter'],
+                "responses": [item['text'] for item in tqdm(ds['train']) if item['role'] == 'assistant']
             }
         ]
     }
+    print("[ ! ] Dataset loaded successfully.")
 else:
     print("[ ! ] Using intents.json dataset.")
     with open('intents.json') as file:
@@ -51,9 +54,11 @@ else:
 # look for unique words and classes
 words, classes, documents = [], [], []
 
-for intent in intents['intents']:
+print("[ ! ] Processing intents...")
+# iterate through each intent and extract words and classes
+for intent in tqdm(intents['intents']):
     tag = intent['tag']
-    for pattern in intent['patterns']:
+    for pattern in tqdm(intent['patterns']):
         tokens = nltk.word_tokenize(pattern)
         words.extend(tokens)
         documents.append((tokens, tag))
@@ -72,7 +77,7 @@ pickle.dump(intents, open('intents.pkl', 'wb'))
 training_data = []
 output_template = [0] * len(classes)
 
-for tokens, tag in documents:
+for tokens, tag in tqdm(documents):
     pattern_words = [lemmatizer.lemmatize(word.lower()) for word in tokens]
     bag = [1 if w in pattern_words else 0 for w in words]
     output_row = output_template.copy()
@@ -116,7 +121,6 @@ history = model.fit(np.array(train_x), np.array(train_y),
 # save model
 model.save('chatbot_model.h5')
 print("[ ! ] Model saved.")
-
 
 
 # plot training history
