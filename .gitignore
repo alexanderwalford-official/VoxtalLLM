@@ -163,3 +163,4 @@ cython_debug/
 # custom
 *.pkl
 *.h5
+*.png
