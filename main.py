@@ -14,6 +14,9 @@ from tensorflow.keras.optimizers import SGD
 from nltk.stem import WordNetLemmatizer
 import datasets as importer
 from joblib import Parallel, delayed
+from tensorflow.keras.utils import plot_model
+import tensorflow as tf
+
 
 
 def process_pattern(pattern, tag):
@@ -38,10 +41,24 @@ nltk.download('punkt_tab')
 nltk.download('wordnet')
 nltk.download('omw-1.4')
 
+
+gpus = tf.config.list_physical_devices('GPU')
+if gpus:
+    try:
+        # restrict TensorFlow to only use the first GPU
+        tf.config.experimental.set_visible_devices(gpus[0], 'GPU')
+        tf.config.experimental.set_memory_growth(gpus[0], True)
+        print("[ ! ] Using GPU: ", gpus[0])
+    except RuntimeError as e:
+        print(e)
+else:
+    print("[ X ] No GPU found! Training will use CPU (slow).")
+
 lemmatizer = WordNetLemmatizer()
 ignore_words = ['?', '!']
 
 # load the dataset...
+# TODO: refactor this and add more functions
 
 # check to see if the local dataset should be used or the ULM dataset
 if os.path.exists('intents.pkl'):
@@ -84,7 +101,7 @@ for intent in intents['intents']:
     
     patterns = intent['patterns']
     
-    # Parallel execution per intent
+    # parallel execution per intent
     results = Parallel(n_jobs=-1, prefer="threads")(
         delayed(process_pattern)(pattern, tag) for pattern in tqdm(patterns)
     )
@@ -131,13 +148,13 @@ print("[ ! ] Training data prepared.")
 
 # create the model
 model = Sequential([
-    Dense(1008, input_shape=(len(train_x[0]),), activation='relu'), # layer 1: input layer with 1008 neurons
-    Dropout(0.5), # dropout layer to prevent overfitting
-    Dense(512, activation='relu'), # layer 2: hidden layer with 512 neurons
-    Dropout(0.5), # dropout layer to prevent overfitting
-    Dense(256, activation='relu'), # layer 3: hidden layer with 256 neurons
-    Dropout(0.5), # dropout layer to prevent overfitting
-    Dense(len(train_y[0]), activation='softmax') # rec activation function is softmax for multi-class classification
+    Dense(256, input_shape=(len(train_x[0]),), activation='relu'),
+    Dropout(0.3),
+    Dense(128, activation='relu'),
+    Dropout(0.3),
+    Dense(64, activation='relu'),
+    Dropout(0.3),
+    Dense(len(train_y[0]), activation='softmax')
 ])
 
 # define the optimiser and compile the model
@@ -145,13 +162,29 @@ sgd = SGD(learning_rate=0.01, momentum=0.9, nesterov=True)
 model.compile(loss='categorical_crossentropy', optimizer=sgd, metrics=['accuracy'])
 
 # early stopping and model checkpointing
-early_stopping = EarlyStopping(monitor='loss', patience=EPOCHS, verbose=1)
+early_stopping = EarlyStopping(monitor='val_loss', patience=3, verbose=1, restore_best_weights=True)
 model_checkpoint = ModelCheckpoint('bestchatbot_model.h5', monitor='loss', save_best_only=True, verbose=1)
 
-# fit the model
-history = model.fit(np.array(train_x), np.array(train_y),
-                    epochs=EPOCHS, batch_size=5, verbose=1,
-                    callbacks=[early_stopping, model_checkpoint])
+# load the dataset for validation
+# TODO: Add a way to use a different dataset for validation
+ds = importer.load_dataset(dataset_url)
+
+# prepare validation data (similar to training data)
+val_patterns = [item['text'] for item in ds['validation'] if item['role'] == 'prompter']
+val_documents = [(nltk.word_tokenize(pattern), 'chat') for pattern in val_patterns]
+val_results = [process_document(doc, words, classes, output_template, lemmatizer) for doc in val_documents]
+val_data = np.array(val_results, dtype=object)
+val_x = list(val_data[:, 0])
+val_y = list(val_data[:, 1])
+
+
+# fit the model with validation data
+history = model.fit(
+    np.array(train_x), np.array(train_y),
+    epochs=EPOCHS, batch_size=32, verbose=1,
+    validation_data=(np.array(val_x), np.array(val_y)),
+    callbacks=[early_stopping, model_checkpoint]
+)
 
 # save model
 model.save('chatbot_model.h5')
@@ -159,6 +192,9 @@ print("[ ! ] Model saved.")
 
 
 # plot training history
+
+# visualise the model architecture
+plot_model(model, to_file='model_architecture.png', show_shapes=True, show_layer_names=True)
 
 
 plt.figure(figsize=(12, 5))
